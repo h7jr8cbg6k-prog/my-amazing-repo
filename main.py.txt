@@ -1,0 +1,310 @@
+﻿import os
+import json
+import discord
+
+
+from discord.ext import commands, tasks
+
+
+TOKEN = os.getenv(MTU2MDgwOTU0MjU5MjQ5OTcxNA.GUenEp.9PLDHECBcxAOpSM2P2NTYQVXtDW8d4TOjE-Sto)
+CONFIG_FILE = "voice_config.json"
+
+
+intents = discord.Intents.default()
+intents.voice_states = True
+
+
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents
+)
+
+
+
+
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=4)
+
+
+
+
+config = load_config()
+
+
+
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"Command sync error: {e}")
+
+
+    if not maintain_voice.is_running():
+        maintain_voice.start()
+
+
+
+
+@bot.tree.command(
+    name="join",
+    description="Join your voice channel"
+)
+async def join(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+
+    if not interaction.user.voice:
+        await interaction.response.send_message(
+            "Join a voice channel first!",
+            ephemeral=True
+        )
+        return
+
+
+    channel = interaction.user.voice.channel
+    voice = interaction.guild.voice_client
+
+
+    try:
+        if voice and voice.is_connected():
+            await voice.move_to(channel)
+        else:
+            await channel.connect()
+
+
+        await interaction.response.send_message(
+            f"Joined {channel.name}!"
+        )
+
+
+    except Exception as e:
+        await interaction.response.send_message(
+            f"Could not join: {e}",
+            ephemeral=True
+        )
+
+
+
+
+@bot.tree.command(
+    name="leave",
+    description="Leave the voice channel"
+)
+async def leave(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+
+    config.pop(str(interaction.guild.id), None)
+    save_config(config)
+
+
+    voice = interaction.guild.voice_client
+
+
+    if voice:
+        await voice.disconnect(force=True)
+
+
+        await interaction.response.send_message(
+            "Left the voice channel. 24/7 mode disabled."
+        )
+    else:
+        await interaction.response.send_message(
+            "I'm not connected to a voice channel.",
+            ephemeral=True
+        )
+
+
+
+
+@bot.tree.command(
+    name="247",
+    description="Enable 24/7 voice mode"
+)
+async def enable_247(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+
+    if not interaction.user.voice:
+        await interaction.response.send_message(
+            "Join a voice channel first!",
+            ephemeral=True
+        )
+        return
+
+
+    guild_id = str(interaction.guild.id)
+    channel = interaction.user.voice.channel
+
+
+    try:
+        voice = interaction.guild.voice_client
+
+
+        if voice and voice.is_connected():
+            if voice.channel != channel:
+                await voice.move_to(channel)
+        else:
+            await channel.connect()
+
+
+        config[guild_id] = channel.id
+        save_config(config)
+
+
+        await interaction.response.send_message(
+            f"24/7 mode enabled! Staying in {channel.name}."
+        )
+
+
+    except Exception as e:
+        await interaction.response.send_message(
+            f"Could not enable 24/7 mode: {e}",
+            ephemeral=True
+        )
+
+
+
+
+@bot.tree.command(
+    name="247off",
+    description="Disable 24/7 mode"
+)
+async def disable_247(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+
+    config.pop(str(interaction.guild.id), None)
+    save_config(config)
+
+
+    await interaction.response.send_message(
+        "24/7 mode disabled."
+    )
+
+
+
+
+@bot.tree.command(
+    name="status",
+    description="Check voice status"
+)
+async def status(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(
+            "Use this command in a server.",
+            ephemeral=True
+        )
+        return
+
+
+    guild_id = str(interaction.guild.id)
+    voice = interaction.guild.voice_client
+    enabled = guild_id in config
+
+
+    if voice and voice.is_connected():
+        connection = f"Connected to {voice.channel.name}"
+    else:
+        connection = "Not connected"
+
+
+    await interaction.response.send_message(
+        f"Voice status: {connection}\n"
+        f"24/7 mode: {'Enabled' if enabled else 'Disabled'}"
+    )
+
+
+
+
+@tasks.loop(seconds=30)
+async def maintain_voice():
+    for guild_id, channel_id in list(config.items()):
+        guild = bot.get_guild(int(guild_id))
+
+
+        if guild is None:
+            continue
+
+
+        voice = guild.voice_client
+
+
+        if voice and voice.is_connected():
+            continue
+
+
+        channel = guild.get_channel(int(channel_id))
+
+
+        if channel is None:
+            continue
+
+
+        try:
+            await channel.connect(
+                timeout=20,
+                reconnect=True
+            )
+
+
+            print(f"Reconnected to {channel.name}")
+
+
+        except Exception as e:
+            print(f"Reconnect failed: {e}")
+
+
+
+
+@maintain_voice.before_loop
+async def before_maintain_voice():
+    await bot.wait_until_ready()
+
+
+
+
+if not TOKEN:
+    raise RuntimeError(
+        "Set the DISCORD_TOKEN environment variable."
+    )
+
+
+bot.run(TOKEN)
